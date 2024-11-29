@@ -25,6 +25,7 @@ let property = {
     DrawGrid: true,
     DrawPoints: true,
     LocalizationMode: false,
+    ExtraRotation: false,
     ResetSignal: function () { },
     StopSignal: function () { }
 };
@@ -167,6 +168,7 @@ function initGui() {
     gui.add(property, 'LocalizationMode').onChange(setLocalizationMode);
     gui.add(property, 'ResetSignal').domElement.children[0].innerHTML = "<button onclick='onClickReset()'>reset</button>";
     gui.add(property, 'StopSignal').domElement.children[0].innerHTML = "<button onclick='onClickTerminate()'>terminate</button>";
+    gui.add(property, 'ExtraRotation').onChange(setExtraRotation);
 }
 
 function setCameraMode(val) {
@@ -300,6 +302,7 @@ function receiveProtobuf(msg) {
     }
     else {
         loadProtobufData(obj, keyframes, edges, points, referencePointIds, currentFramePose, markers);
+        adjustRotationToIncomingData(keyframes, points, currentFramePose, markers);
         updateMapElements(msg.length, keyframes, edges, points, referencePointIds, currentFramePose, markers);
     }
 }
@@ -464,4 +467,125 @@ function onThumbClick() {
         document.getElementById("thumb").style.transform = 'translate(' + x + 'px, ' + y + 'px) scale(' + THUMB_SCALING + ')';
     }
 
+}
+
+class ExtraRotation {
+    constructor() {
+        this.rotation3x3 = [ 1,0,0, 0,1,0, 0,0,1 ];
+        this.invRot4x4 = [ 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 ];
+    }
+
+    setRotation(r) {
+        if (r.length != 9)
+            throw "Invalid rotation";
+
+        for (let i = 0 ; i < 9 ; i++)
+            this.rotation3x3[i] = r[i];
+
+        // For the inverse we just need to transpose the 3x3 part
+        for (let i = 0 ; i < 3 ; i++)
+            for (let j = 0 ; j < 3 ; j++)
+                this.invRot4x4[i*4+j] = this.rotation3x3[j*3+i];
+    }
+
+    setInvertCurrentRotation() {
+        let R = [ 0,0,0, 0,0,0, 0,0,0 ];
+        for (let i = 0 ; i < 3 ; i++)
+            for (let j = 0 ; j < 3 ; j++)
+                R[i*3+j] = this.rotation3x3[j*3+i]; // get transpose
+
+        this.setRotation(R);
+    }
+
+    multiplyPoseWithInv(pose, result) {
+        for (let i = 0 ; i < 4 ; i++) {
+            for (let j = 0 ; j < 4 ; j++) {
+                let s = 0;
+                for (let k = 0 ; k < 4 ; k++)
+                    s += pose[i][k]*this.invRot4x4[k*4+j];
+
+                result[i][j] = s;
+            }
+        }
+    }
+
+    multiplyRotationWithPosition(position, result, extraoffset=0) {
+        for (let i = 0 ; i < 3 ; i++) {
+            let s = 0;
+            for (let j = 0 ; j < 3 ; j++)
+                s += this.rotation3x3[i*3+j]*position[j + extraoffset];
+
+            result[i] = s;
+        }
+    }
+}
+
+const extraRotation = new ExtraRotation();
+
+function adjustRotationToIncomingData(keyframes, points, currentFramePose, markers) {
+    let positionBuffer = [ 0, 0, 0 ];
+    let poseBuffer = [ [ 0,0,0,0 ], [ 0,0,0,0 ], [ 0,0,0,0 ] , [ 0,0,0,0 ] ];
+
+    function adjustPose(pose) {
+        if (!pose)
+            return;
+
+        extraRotation.multiplyPoseWithInv(pose, poseBuffer);
+        for (let i = 0 ; i < 4 ; i++)
+            for (let j = 0 ; j < 4 ; j++)
+                pose[i][j] = poseBuffer[i][j];
+    }
+
+    function adjustPosition(pos_array, startidx=0) {
+        if (!pos_array)
+            return;
+
+        extraRotation.multiplyRotationWithPosition(pos_array, positionBuffer, startidx);
+        for (let i = 0 ; i < 3 ; i++)
+            pos_array[startidx + i] = positionBuffer[i];
+    }
+
+    for (let kf of keyframes)
+        adjustPose(kf.camera_pose);
+
+    if (currentFramePose)
+        adjustPose(currentFramePose);
+
+    for (let p of points)
+        adjustPosition(p.point_pos);
+
+    for (let m of markers) {
+        for (let startidx = 0 ; startidx < 12 ; startidx += 3)
+            adjustPosition(m.corners_pos, startidx);
+    }
+}
+
+function applyRotationToGeometry(rot, geom) {
+    let posBuffer = [0, 0, 0];
+    for (let v of geom.vertices) {
+        let {x, y, z} = v;
+        rot.multiplyRotationWithPosition([x,y,z], posBuffer);
+        v.set(posBuffer[0], posBuffer[1], posBuffer[2]);
+    }
+    geom.verticesNeedUpdate = true;
+}
+
+function applyRotationToExistingData(rot) {
+    markerIndicators.applyRotation(rot);
+    cameraFrames.applyRotation(rot);
+    pointCloud.applyRotation(rot);
+}
+
+function setExtraRotation(val) {
+    extraRotation.setInvertCurrentRotation();
+    applyRotationToExistingData(extraRotation);
+
+    if (val == true) {
+        extraRotation.setRotation([1,0,0, 0,0,-1, 0,1,0]);
+    }
+    else {
+        extraRotation.setRotation([1,0,0, 0,1,0, 0,0,1]);
+    }
+
+    applyRotationToExistingData(extraRotation);
 }

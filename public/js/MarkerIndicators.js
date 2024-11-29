@@ -101,4 +101,11 @@ class MarkerIndicators {
 
         return lineGeo;
     }
+
+    applyRotation(rot) {
+        for (let id in this.addedMarkers) {
+            let m = this.addedMarkers[id];
+            applyRotationToGeometry(rot, m.geometry);
+        }
+    }
 }

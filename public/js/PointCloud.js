@@ -177,4 +177,9 @@ class PointCloud {
         this.cloudMaterial.visible = visibility;
     }
 
+    applyRotation(rot) {
+        for (let i = 0 ; i < this.cloudGeometries.length ; i++) {
+            applyRotationToGeometry(rot, this.cloudGeometries[i]);
+        }
+    }
 }

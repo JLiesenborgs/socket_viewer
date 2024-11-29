@@ -199,4 +199,13 @@ class CameraFrames {
         this.edges.visible = visible;
     }
 
+    applyRotation(rot) {
+        // The Graph
+        applyRotationToGeometry(rot, this.edges.geometry);
+
+        // The keyframes
+        for (let kf of this.keyframeObjects) {
+            applyRotationToGeometry(rot, kf.geometry);
+        }
+    }
 }
